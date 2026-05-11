@@ -11,7 +11,21 @@ export function categorizeModel(modelId: string): 'chat' | 'embedding' | 'unknow
   if (lowerId.includes('gpt') || lowerId.includes('llama') || 
       lowerId.includes('claude') || lowerId.includes('qwen') ||
       lowerId.includes('mistral') || lowerId.includes('gemma') ||
-      lowerId.includes('phi') || lowerId.includes('falcon')) {
+      lowerId.includes('phi') || lowerId.includes('falcon') ||
+      lowerId.includes('nemotron') || lowerId.includes('glm') ||
+      lowerId.includes('deepseek') || lowerId.includes('gemini') ||
+      lowerId.includes('mixtral') || lowerId.includes('command') ||
+      lowerId.includes('dbrx') || lowerId.includes('olmo') ||
+      lowerId.includes('starcoder') || lowerId.includes('granite') ||
+      lowerId.includes('aya') || lowerId.includes('baichuan') ||
+      lowerId.includes('bloom') || lowerId.includes('codestral') ||
+      lowerId.includes('dolphin') || lowerId.includes('hermes') ||
+      lowerId.includes('internlm') || lowerId.includes('jamba') ||
+      lowerId.includes('mpt') || lowerId.includes('nous') ||
+      lowerId.includes('openchat') || lowerId.includes('replit') ||
+      lowerId.includes('solar') || lowerId.includes('vicuna') ||
+      lowerId.includes('wizardlm') || lowerId.includes('yi') ||
+      lowerId.includes('zephyr')) {
     return 'chat'
   }
   return 'unknown'
