@@ -65,7 +65,6 @@ export async function enhanceConfig(
       const existingModels = lmstudioProvider.models || {}
       const discoveredModels: Record<string, any> = {}
       let chatModelsCount = 0
-      let embeddingModelsCount = 0
 
       for (const model of models) {
         // Use model ID as key directly for better readability, fallback to sanitized version
@@ -88,14 +87,13 @@ export async function enhanceConfig(
             modelConfig.organizationOwner = owner
           }
 
-          // Add additional metadata based on model type
+          // Skip embedding models - opencode doesn't support "embedding" modality type
+          // and they cause startup failures when auto-discovered from LM Studio
           if (modelType === 'embedding') {
-            embeddingModelsCount++
-            modelConfig.modalities = {
-              input: ["text"],
-              output: ["embedding"]
-            }
-          } else if (modelType === 'chat') {
+            continue
+          }
+
+          if (modelType === 'chat') {
             chatModelsCount++
             modelConfig.modalities = {
               input: ["text", "image"],
@@ -119,8 +117,8 @@ export async function enhanceConfig(
         }
 
         // Provide helpful guidance if no chat models are available
-        if (chatModelsCount === 0 && embeddingModelsCount > 0) {
-          console.warn("[opencode-lmstudio] Only embedding models found. To use chat models:", {
+        if (chatModelsCount === 0) {
+          console.warn("[opencode-lmstudio] No chat models found. To use chat models:", {
             steps: [
               "1. Open LM Studio application",
               "2. Download a chat model (e.g., llama-3.2-3b-instruct)",
