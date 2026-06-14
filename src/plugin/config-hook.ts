@@ -1,12 +1,11 @@
-import { ToastNotifier } from '../ui/toast-notifier'
-import { validateConfig } from '../utils/validation'
-import { enhanceConfig } from './enhance-config'
+import { ToastNotifier } from '../ui/toast-notifier.ts'
+import { validateConfig } from '../utils/validation/index.ts'
+import { enhanceConfig } from './enhance-config.ts'
+import { getLMStudioApiKey } from '../utils/lmstudio-api.ts'
 import type { PluginInput } from '@opencode-ai/plugin'
 
 export function createConfigHook(client: PluginInput['client'], toastNotifier: ToastNotifier) {
   return async (config: any) => {
-    const initialModelCount = config?.provider?.lmstudio?.models ? Object.keys(config.provider.lmstudio.models).length : 0
-    
     // Check if config is modifiable
     if (config && (Object.isFrozen?.(config) || Object.isSealed?.(config))) {
       console.warn("[opencode-lmstudio] Config object is frozen/sealed - cannot modify directly")
@@ -30,8 +29,14 @@ export function createConfigHook(client: PluginInput['client'], toastNotifier: T
     if (!config.provider?.lmstudio) {
       // Quick check - try default port first with timeout
       try {
+        const apiKey = getLMStudioApiKey(config.provider?.lmstudio?.options?.apiKey, "http://127.0.0.1:1234")
+
         const response = await fetch("http://127.0.0.1:1234/v1/models", {
           method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
           signal: AbortSignal.timeout(1000), // 1 second timeout for quick check
         })
         
@@ -43,6 +48,7 @@ export function createConfigHook(client: PluginInput['client'], toastNotifier: T
               name: "LM Studio (local)",
               options: {
                 baseURL: "http://127.0.0.1:1234/v1",
+                ...(apiKey ? { apiKey } : {}),
               },
               models: {},
             }
@@ -56,7 +62,6 @@ export function createConfigHook(client: PluginInput['client'], toastNotifier: T
     // Wait for initial model discovery with timeout (max 5 seconds)
     // This ensures models are available when OpenCode reads the config
     // We use Promise.race to avoid blocking too long, but we check if models were added
-    const startTime = Date.now()
     const discoveryPromise = enhanceConfig(config, client, toastNotifier)
     const timeoutMs = 5000 // 5 second timeout
     
@@ -81,4 +86,3 @@ export function createConfigHook(client: PluginInput['client'], toastNotifier: T
     }
   }
 }
-

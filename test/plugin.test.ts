@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { LMStudioPlugin } from '../src/index.ts'
+import { discoverLMStudioModels, getLMStudioApiKey } from '../src/utils/lmstudio-api.ts'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -49,9 +50,121 @@ describe('LMStudio Plugin', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    delete process.env.LMSTUDIO_API_KEY
+    delete process.env.LM_API_TOKEN
+    delete process.env.CUSTOM_LM_STUDIO_KEY
+  })
+
+  describe('LM Studio API Authentication', () => {
+    it('should resolve api keys from OpenCode env syntax', () => {
+      process.env.CUSTOM_LM_STUDIO_KEY = 'test-token'
+
+      expect(getLMStudioApiKey('{env:CUSTOM_LM_STUDIO_KEY}')).toBe('test-token')
+    })
+
+    it('should fall back to LM Studio-specific environment variables', () => {
+      process.env.LM_API_TOKEN = 'legacy-token'
+      process.env.LMSTUDIO_API_KEY = 'preferred-token'
+
+      expect(getLMStudioApiKey()).toBe('preferred-token')
+    })
+
+    it('should only use environment fallback for local or private LM Studio URLs', () => {
+      process.env.LMSTUDIO_API_KEY = 'private-token'
+
+      expect(getLMStudioApiKey(undefined, 'http://127.0.0.1:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://192.168.0.10:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://[::1]:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://[fc00::1]:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://[fd00::1]:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://[fe80::1]:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'http://[febf::1]:1234/v1')).toBe('private-token')
+      expect(getLMStudioApiKey(undefined, 'https://example.com/v1')).toBeUndefined()
+      expect(getLMStudioApiKey(undefined, 'https://fcorp.example/v1')).toBeUndefined()
+      expect(getLMStudioApiKey(undefined, 'https://fdservice.example/v1')).toBeUndefined()
+      expect(getLMStudioApiKey(undefined, 'https://fe80-models.example/v1')).toBeUndefined()
+      expect(getLMStudioApiKey(undefined, 'http://[fec0::1]:1234/v1')).toBeUndefined()
+    })
+
+    it('should allow explicitly configured env syntax for non-private URLs', () => {
+      process.env.CUSTOM_LM_STUDIO_KEY = 'explicit-token'
+
+      expect(getLMStudioApiKey('{env:CUSTOM_LM_STUDIO_KEY}', 'https://example.com/v1')).toBe('explicit-token')
+    })
+
+    it('should send bearer auth headers during model discovery', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'auth-model', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
+        })
+      })
+
+      await discoverLMStudioModels('http://127.0.0.1:1234/v1', 'explicit-token')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:1234/v1/models',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer explicit-token'
+          })
+        })
+      )
+    })
+
+    it('should not send environment fallback auth headers to public URLs', async () => {
+      process.env.LMSTUDIO_API_KEY = 'private-token'
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'public-model', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
+        })
+      })
+
+      await discoverLMStudioModels('https://example.com/v1')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/v1/models',
+        expect.objectContaining({
+          headers: expect.not.objectContaining({
+            Authorization: expect.any(String)
+          })
+        })
+      )
+    })
   })
 
   describe('Plugin Initialization', () => {
+    it('should log the package version during initialization', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const mockInput: any = {
+        client: mockClient,
+        project: {
+          id: 'test-project',
+          name: 'test',
+          path: '/tmp',
+          worktree: '',
+          time: { created: Date.now() }
+        },
+        directory: '/tmp',
+        worktree: '',
+        $: vi.fn()
+      }
+
+      await LMStudioPlugin(mockInput)
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[opencode-lmstudio] LM Studio plugin initialized',
+        expect.objectContaining({
+          version: expect.any(String)
+        })
+      )
+    })
+
     it('should initialize successfully with valid client', async () => {
       const mockInput: any = {
         client: mockClient,
@@ -193,54 +306,61 @@ describe('LMStudio Plugin', () => {
       })
     })
 
-    it('should include context limits and capabilities from LM Studio metadata', async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true
+    it('should generate the whitelist from discovered models instead of stale defaults', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'qwen/qwen3-coder-next', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
         })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            models: [
-              {
-                key: 'qwen3.6-35b-a3b',
-                display_name: 'Qwen3.6 35B A3B UD',
-                type: 'vlm',
-                max_context_length: 262144,
-                capabilities: {
-                  vision: true,
-                  trained_for_tool_use: true
-                },
-                loaded_instances: [
-                  {
-                    id: 'qwen3.6-35b-a3b',
-                    config: {
-                      context_length: 131072
-                    }
-                  }
-                ]
-              }
-            ]
-          })
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            models: [
-              {
-                key: 'qwen3.6-35b-a3b',
-                display_name: 'Qwen3.6 35B A3B UD',
-                type: 'vlm',
-                max_context_length: 262144,
-                capabilities: {
-                  vision: true,
-                  trained_for_tool_use: true
-                }
-              }
-            ]
-          })
-        })
+      })
 
+      const config: any = {
+        provider: {
+          lmstudio: {
+            npm: '@ai-sdk/openai-compatible',
+            name: 'LM Studio (local)',
+            options: { baseURL: 'http://127.0.0.1:1234/v1' },
+            models: {
+              'gpt-oss-20b': { name: 'GPT OSS 20B' },
+              'qwen3-30b-a3b-2507': { name: 'Qwen3 30B A3B 2507' }
+            }
+          }
+        }
+      }
+
+      await pluginHooks.config(config)
+
+      expect(config.provider.lmstudio.models).toEqual(expect.objectContaining({
+        'gpt-oss-20b': { name: 'GPT OSS 20B' },
+        'qwen3-30b-a3b-2507': { name: 'Qwen3 30B A3B 2507' },
+        'qwen_qwen3-coder-next': expect.objectContaining({
+          id: 'qwen/qwen3-coder-next',
+          name: 'Qwen3 Coder Next'
+        })
+      }))
+      expect(config.provider.lmstudio.whitelist).toEqual([
+        'qwen_qwen3-coder-next',
+        'qwen/qwen3-coder-next'
+      ])
+      expect(config.provider.lmstudio.whitelist).not.toContain('gpt-oss-20b')
+      expect(config.provider.lmstudio.whitelist).not.toContain('qwen3-30b-a3b-2507')
+    })
+
+    it('should skip embedding models and mark discovered LLM modalities', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'text-embedding-nomic-embed-text-v1.5', object: 'model', created: 1234567890, owned_by: 'local' },
+            { id: 'qwen/qwen3-coder-30b', object: 'model', created: 1234567890, owned_by: 'local' },
+            { id: 'gemma-4-12b-it', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
+        })
+      })
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
       const config: any = {
         provider: {
           lmstudio: {
@@ -254,20 +374,63 @@ describe('LMStudio Plugin', () => {
 
       await pluginHooks.config(config)
 
-      expect(config.provider.lmstudio.models['qwen3_6-35b-a3b']).toEqual(
-        expect.objectContaining({
-          id: 'qwen3.6-35b-a3b',
-          name: 'Qwen3.6 35B A3B UD',
-          toolCall: true,
-          limit: {
-            context: 131072
-          },
-          modalities: {
-            input: ['text', 'image'],
-            output: ['text']
-          }
+      expect(config.provider.lmstudio.models).not.toHaveProperty('text-embedding-nomic-embed-text-v1_5')
+      expect(config.provider.lmstudio.whitelist).not.toContain('text-embedding-nomic-embed-text-v1_5')
+      expect(config.provider.lmstudio.whitelist).not.toContain('text-embedding-nomic-embed-text-v1.5')
+      expect(config.provider.lmstudio.whitelist).toEqual(expect.arrayContaining([
+        'qwen_qwen3-coder-30b',
+        'qwen/qwen3-coder-30b',
+        'gemma-4-12b-it'
+      ]))
+      expect(config.provider.lmstudio.models['qwen_qwen3-coder-30b']).toEqual(expect.objectContaining({
+        id: 'qwen/qwen3-coder-30b',
+        modalities: {
+          input: ['text'],
+          output: ['text']
+        }
+      }))
+      expect(config.provider.lmstudio.models['gemma-4-12b-it']).toEqual(expect.objectContaining({
+        id: 'gemma-4-12b-it',
+        modalities: {
+          input: ['text', 'image'],
+          output: ['text']
+        }
+      }))
+      expect(consoleSpy).toHaveBeenCalledWith('[opencode-lmstudio] Skipped embedding models', { count: 1 })
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should preserve an explicit LM Studio model whitelist', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'qwen/qwen3-coder-30b', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
         })
-      )
+      })
+
+      const config: any = {
+        provider: {
+          lmstudio: {
+            npm: '@ai-sdk/openai-compatible',
+            name: 'LM Studio (local)',
+            options: { baseURL: 'http://127.0.0.1:1234/v1' },
+            whitelist: ['existing-model'],
+            models: {
+              'existing-model': { name: 'Existing Model' }
+            }
+          }
+        }
+      }
+
+      await pluginHooks.config(config)
+
+      expect(config.provider.lmstudio.whitelist).toEqual(['existing-model'])
+      expect(config.provider.lmstudio.models['qwen_qwen3-coder-30b']).toEqual(expect.objectContaining({
+        id: 'qwen/qwen3-coder-30b'
+      }))
     })
 
     it('should handle LM Studio offline gracefully', async () => {
@@ -363,6 +526,46 @@ describe('LMStudio Plugin', () => {
       expect(output.options?.lmstudioValidation).toEqual(expect.objectContaining({
         status: 'success',
         model: 'test-model'
+      }))
+    })
+
+    it('should send configured apiKey when validating LM Studio model availability', async () => {
+      process.env.CUSTOM_LM_STUDIO_KEY = 'runtime-token'
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'auth-runtime-model', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
+        })
+      })
+
+      const input = {
+        sessionID: 'test-session',
+        model: { id: 'auth-runtime-model' },
+        provider: {
+          info: { id: 'lmstudio' },
+          options: {
+            baseURL: 'http://127.0.0.1:4321/v1',
+            apiKey: '{env:CUSTOM_LM_STUDIO_KEY}'
+          }
+        }
+      }
+      const output: any = {}
+
+      await pluginHooks['chat.params'](input, output)
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:4321/v1/models',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer runtime-token'
+          })
+        })
+      )
+      expect(output.options?.lmstudioValidation).toEqual(expect.objectContaining({
+        status: 'success',
+        model: 'auth-runtime-model'
       }))
     })
 
