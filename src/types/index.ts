@@ -11,6 +11,7 @@ export interface LMStudioModel {
   compatibility_type?: string
   max_context_length?: number
   loaded_context_length?: number
+  quantization_name?: string
   capabilities?: string[] | {
     vision?: boolean
     trained_for_tool_use?: boolean
@@ -36,6 +37,10 @@ export interface LMStudioAPIV1Model {
   architecture?: string
   format?: string
   max_context_length?: number
+  quantization?: {
+    name: string
+    bits_per_weight?: number
+  }
   capabilities?: {
     vision?: boolean
     trained_for_tool_use?: boolean

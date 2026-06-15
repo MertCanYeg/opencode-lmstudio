@@ -122,6 +122,7 @@ function normalizeAPIV1Model(model: LMStudioAPIV1Model): LMStudioModel {
     compatibility_type: model.format,
     max_context_length: model.max_context_length,
     loaded_context_length: resolveLoadedContextLength(model),
+    quantization_name: model.quantization?.name,
     capabilities: model.capabilities,
     loaded_instances: model.loaded_instances,
   }

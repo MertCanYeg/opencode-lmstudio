@@ -17,6 +17,11 @@ export function extractModelOwner(modelId: string): string | undefined {
  */
 export function formatModelName(model: LMStudioModel): string {
   if (model.display_name) {
+    // Check if display_name already contains a quantization tag (e.g. "@q4 K S", "@iq4 Nl Xl")
+    const hasQuantTag = /@\w[\w\s]*$/.test(model.display_name)
+    if (!hasQuantTag && model.quantization_name) {
+      return `${model.display_name}@${formatQuantName(model.quantization_name)}`
+    }
     return model.display_name
   }
 
@@ -63,4 +68,22 @@ export function formatModelName(model: LMStudioModel): string {
     .join(' ')
   
   return tokens
+}
+
+/**
+ * Format a quantization name for display (e.g., "IQ4_NL" -> "iq4 Nl", "Q4_K_S" -> "q4 K S")
+ */
+function formatQuantName(name: string): string {
+  return name
+    .split('_')
+    .map(part => {
+      // Match letter prefix + digits (e.g., "IQ4", "Q4", "K6")
+      const m = part.match(/^([A-Za-z]+)(\d+)$/);
+      if (m) return m[1].toLowerCase() + m[2];
+      // All uppercase letters -> lowercase (e.g., "NL" -> "nl", "XL" -> "xl")
+      if (/^[A-Z]+$/.test(part)) return part.toLowerCase();
+      // Already lowercase or mixed
+      return part;
+    })
+    .join(' ')
 }
